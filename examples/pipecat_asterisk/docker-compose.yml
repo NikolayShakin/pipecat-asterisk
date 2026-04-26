@@ -1,0 +1,10 @@
+---
+services:
+  asterisk:
+    image: andrius/asterisk:latest
+    ports:
+      - "5060:5060/udp"
+      - "10000-10050:10000-10050/udp"
+    volumes:
+      - ./etc:/etc/asterisk
+    restart: unless-stopped
