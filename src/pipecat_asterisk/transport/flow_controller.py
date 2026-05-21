@@ -107,8 +107,9 @@ class FlowController:
 
                 # If the remote buffer is in working range (between the low and high water marks)
                 # we  only send if we have more than _min_batch bytes of audio in the local buffer to avoid sending small chunks on every tick
+                # and we have at least twice as much free space in the remote buffer as the minimum batch size to avoid overfilling the remote buffer and causing audio dropouts on the Asterisk side.
                 elif (
-                    self._remote_buffer_utilization < self._remote_buffer_high_water
+                    self._remote_buffer_utilization < self._remote_buffer_high_water - self._min_batch * 2
                 ) and (len(self._local_buffer) >= self._min_batch):
                     await self.send_chunks()
                 # If the remote buffer is above the high water mark we don't send anything and wait for the next tick to see if the remote buffer utilization has decreased enough to send more audio
@@ -122,18 +123,12 @@ class FlowController:
         """
 
         # Calculate the number of bytes to send
-        bytes_to_send = int(
-            min(
-                len(self._local_buffer),
-                self._remote_buffer_high_water - self._remote_buffer_utilization,
-            )
-        )
         bytes_to_send = min(
-            bytes_to_send, self.MAX_WS_SEND
+            len(self._local_buffer), self.MAX_WS_SEND
         )  # Ensure we don't exceed the websocket maximum message size
         if bytes_to_send > 0:
             # Take the bytes to send from the local buffer
-            chunk = self._local_buffer[:bytes_to_send]
+            chunk = bytes(self._local_buffer[:bytes_to_send])
             del self._local_buffer[:bytes_to_send]
 
             # Send the chunk to the websocket

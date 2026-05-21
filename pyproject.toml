@@ -1,6 +1,6 @@
 [project]
 name = "pipecat-asterisk"
-version = "0.1.0"
+version = "0.1.1"
 description = "This package provides a WebSocket transport for integrating Pipecat applications with Asterisk websocket channel, enabling real-time audio streaming and signalling interaction between Asterisk and Pipecat applications."
 readme = "README.md"
 authors = [

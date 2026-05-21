@@ -6,5 +6,6 @@
 
 from .serializer.serializer import AsteriskFrameSerializer
 from .transport.transport import AsteriskWebsocketTransport
+from .utils import FileAudioGenerator, WhiteNoiseGenerator
 
-__all__ = ["AsteriskFrameSerializer", "AsteriskWebsocketTransport"]
+__all__ = ["AsteriskFrameSerializer", "AsteriskWebsocketTransport", "FileAudioGenerator", "WhiteNoiseGenerator"]
