@@ -236,3 +236,6 @@ class AsteriskWebsocketTransport(FastAPIWebsocketTransport):
         self._output = AsteriskWebsocketOutputTransport(
             self, self._client, params, name=output_name
         )
+
+    def wait_for_queue_drain(self, timeout: int = 30):
+        return self._output._wait_for_queue_drain(timeout)
