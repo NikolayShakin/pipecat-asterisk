@@ -92,6 +92,29 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 f"{self} exception sending START_MEDIA_BUFFERING: {e.__class__.__name__} ({e})"
             )
 
+
+    """Ask Asterisk's `chan_websocket` to report QUEUE_DRAINED in the future, so that we know
+    when audio has been played out on the UX side.
+    """
+    async def _request_queue_drained(self):
+        if self._client.is_closing or not self._client.is_connected:
+            logger.warning(
+                f"Cannot send REPORT_QUEUE_DRAINED command because the WebSocket client is closing or already closed."
+            )
+            return
+        if not self._params.serializer:
+            logger.error(
+                f"Cannot send REPORT_QUEUE_DRAINED command because no serializer is set in the transport parameters."
+            )
+            return
+        try:
+            cmd = await self._params.serializer.serialize(AsteriskCommandFrame("REPORT_QUEUE_DRAINED"))
+            if cmd:
+                await self._client.send(cmd)
+                logger.info(f"Sent REPORT_QUEUE_DRAINED command to Asterisk WebSocket channel to enable audio buffering.")
+        except Exception as e:
+            logger.error(f"{self} exception sending REPORT_QUEUE_DRAINED: {e.__class__.__name__} ({e})")
+    
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process outgoing frames.
 
