@@ -44,6 +44,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             )
         super().__init__(transport, client, params)
         self._flow_controller = None
+        self._queue_drain_monitor = asyncio.Event()
 
     async def _media_start_handler(self, frame: InputTransportMessageFrame):
         """Handle the MEDIA_START event.
@@ -114,7 +115,25 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 logger.info(f"Sent REPORT_QUEUE_DRAINED command to Asterisk WebSocket channel to enable audio buffering.")
         except Exception as e:
             logger.error(f"{self} exception sending REPORT_QUEUE_DRAINED: {e.__class__.__name__} ({e})")
-    
+  
+    """Async-wait until queue drain monitor Event is fired.
+    """
+    async def _wait_for_queue_drain(self, timeout: int = 30):
+        await self._request_queue_drained()
+
+        logger.debug(f"Waiting for QUEUE_DRAINED report with a timeout of {timeout} sec")
+
+        start_time = time.monotonic()
+        
+        try:
+            await asyncio.wait_for(self._queue_drain_monitor.wait(), timeout=timeout)
+            elapsed_sec = time.monotonic() - start_time
+            logger.info(f"Received QUEUE_DRAINED report after {elapsed_sec:.2f} sec")
+        except asyncio.TimeoutError:
+            logger.debug("Timed out waiting for queue drain monitor")
+        finally:
+            self._queue_drain_monitor.clear()
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process outgoing frames.
 
