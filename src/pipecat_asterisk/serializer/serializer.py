@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 
-from typing import Any, Awaitable, Callable, Optional, cast
+from typing import Awaitable, Callable, Optional
 from loguru import logger
 from pipecat.audio.dtmf.types import KeypadEntry
 from pipecat.audio.utils import create_stream_resampler
@@ -94,28 +94,41 @@ class AsteriskFrameSerializer(FrameSerializer):
             OutputAudioRawFrame: self._frame_outputaudiorawframe,
         }
 
-    def _handle_event(self, message: dict) -> Frame | None:
-        """Call the event handler if the handler is defined in the class, otherwise return None.
+        # Event handlers are keyed by Asterisk event-name string, matching
+        # the values produced by the protocol parser. All handlers are sync
+        # so one table is enough; same goal as the frame tables - skip the
+        # per-event `getattr` + `f"_ev_{name.lower()}"` lookup.
+        self._event_handlers: dict[str, Callable[[dict], Frame | None]] = {
+            "MEDIA_START": self._ev_media_start,
+            "MEDIA_XOFF": self._ev_media_xoff,
+            "MEDIA_XON": self._ev_media_xon,
+            "DTMF_END": self._ev_dtmf_end,
+            "QUEUE_DRAINED": self._ev_queue_drained,
+        }
 
-        The handler methods should be named as "_ev_{event_name.lower()}" and should take the event message as a dictionary and return a Frame or None.
+    def _handle_event(self, message: dict) -> Frame | None:
+        """Dispatch an Asterisk event through the precomputed handler table.
+
+        The event-handler table is built once in ``__init__`` and keyed by
+        the exact event-name string Asterisk sends. Unknown events fall
+        through to the same warning path as the original reflective form.
 
         Args:
             message: The event message as a dictionary.
         """
 
-        message_type = message.get("event", None)
+        message_type = message.get("event")
         if message_type is None:
             logger.warning(
-                f"Received Asterisk WebSocket message without 'event' field: {message}"
+                "Received Asterisk WebSocket message without 'event' field: {}",
+                message,
             )
             return None
-        handler = getattr(self, f"_ev_{message_type.lower()}", None)
-        if callable(handler):
-            typed_handler = cast(Callable[[dict], Frame | None], handler)
-            return typed_handler(message)
-        else:
-            logger.info(f"Received unhandled Asterisk WebSocket event: {message}")
-            return None
+        handler = self._event_handlers.get(message_type)
+        if handler is not None:
+            return handler(message)
+        logger.info("Received unhandled Asterisk WebSocket event: {}", message)
+        return None
 
     ### Asterisk Event handlers ###
 
