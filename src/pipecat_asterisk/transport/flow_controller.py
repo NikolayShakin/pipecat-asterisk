@@ -81,7 +81,9 @@ class FlowController:
         self._local_buffer.append(chunk)
         self._local_buffer_size += len(chunk)
         logger.trace(
-            f"Buffered {len(chunk)} bytes to local buffer. Local buffer size: {self._local_buffer_size} bytes."
+            "Buffered {} bytes to local buffer. Local buffer size: {} bytes.",
+            len(chunk),
+            self._local_buffer_size,
         )
 
     async def flow_control(self):
@@ -174,7 +176,12 @@ class FlowController:
             # Update the remote buffer utilization
             self._remote_buffer_utilization += len(chunk)
             logger.debug(
-                f"Sent {len(chunk)} bytes to websocket. Remote buffer utilization: {self._remote_buffer_utilization:.0f} bytes, {self._remote_buffer_utilization / (self._psize * self.REMOTE_BUFFER_SIZE) * 100:.1f}%."
+                "Sent {} bytes to websocket. Remote buffer utilization: {:.0f} bytes, {:.1f}%.",
+                len(chunk),
+                self._remote_buffer_utilization,
+                self._remote_buffer_utilization
+                / (self._psize * self.REMOTE_BUFFER_SIZE)
+                * 100,
             )
 
     def close(self) -> None:
