@@ -177,22 +177,39 @@ class FlowController:
                 f"Sent {len(chunk)} bytes to websocket. Remote buffer utilization: {self._remote_buffer_utilization:.0f} bytes, {self._remote_buffer_utilization / (self._psize * self.REMOTE_BUFFER_SIZE) * 100:.1f}%."
             )
 
-    def close(self, gracefully: bool = False):
-        """Cancel the flow control task and optionally wait for the local buffer to be sent before cancelling.
+    def close(self) -> None:
+        """Cancel the flow control task immediately.
+
+        This is the synchronous, non-graceful close: pending audio in the
+        local buffer is dropped. Callers that need to wait for the buffer to
+        drain before cancelling must use :meth:`aclose` instead, which uses
+        ``await asyncio.sleep`` so the ``flow_control`` task can actually run
+        and drain the buffer.
+        """
+        if self._flow_control is not None:
+            self._flow_control.cancel()
+
+    async def aclose(self, gracefully: bool = False) -> None:
+        """Cancel the flow control task, optionally draining the local buffer first.
 
         Args:
-            gracefully: If True, wait for the local buffer to be sent before cancelling the flow control
+            gracefully: If True, wait until the local buffer is empty (so the
+                ``flow_control`` task has had a chance to send everything),
+                then cancel. If False, behave the same as :meth:`close`.
         """
-        if self._flow_control:
-            if gracefully:
-                logger.info(
-                    f"Gracefully closing flow controller. Waiting for local buffer to be sent..."
-                )
-                while self._local_buffer_size > 0:
-                    time.sleep(
-                        self._ptime / 1000
-                    )  # Sleep for the duration of one audio chunk to give the flow control loop time to send the remaining audio in the local buffer
-            self._flow_control.cancel()
+        if self._flow_control is None:
+            return
+        if gracefully:
+            logger.info(
+                "Gracefully closing flow controller. Waiting for local buffer to be sent..."
+            )
+            # Sleep one chunk-duration at a time on the event loop, allowing
+            # the flow_control task to keep draining `_local_buffer`. Using
+            # `time.sleep` here would block the event loop and prevent the
+            # very draining we're waiting on.
+            while self._local_buffer_size > 0:
+                await asyncio.sleep(self._ptime / 1000)
+        self._flow_control.cancel()
 
     def drop_buffer(self):
         """Drop any buffered audio in the local buffer and reset remote buffer utilization to zero.
