@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 
-from .serializer.serializer import AsteriskFrameSerializer
+from .serializer.serializer import AsteriskFrameSerializer, AsteriskCommandFrame
 from .transport.transport import AsteriskWebsocketTransport
 from .utils import FileAudioGenerator, WhiteNoiseGenerator
 
-__all__ = ["AsteriskFrameSerializer", "AsteriskWebsocketTransport", "FileAudioGenerator", "WhiteNoiseGenerator"]
+__all__ = ["AsteriskFrameSerializer", "AsteriskCommandFrame", "AsteriskWebsocketTransport", "FileAudioGenerator", "WhiteNoiseGenerator"]
