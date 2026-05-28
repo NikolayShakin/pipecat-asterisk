@@ -110,7 +110,29 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             and frame.message.get("event", None) == "MEDIA_START"
         ):
             await self._media_start_handler(frame)
-
+        elif isinstance(frame, AsteriskCommandFrame):
+            # Send the command to Asterisk WebSocket channel
+            if self._client.is_closing or not self._client.is_connected:
+                logger.warning(
+                    f"Cannot send AsteriskCommandFrame because the WebSocket client is closing or already closed."
+                )
+                return
+            if not self._params.serializer:
+                logger.error(
+                    f"Cannot send AsteriskCommandFrame because no serializer is set in the transport parameters."
+                )
+                return
+            try:
+                cmd = await self._params.serializer.serialize(frame)
+                if cmd:
+                    await self._client.send(cmd)
+                    logger.info(
+                        f"Sent command: {frame.cmd} to Asterisk WebSocket channel."
+                    )
+            except Exception as e:
+                logger.error(
+                    f"{self} exception sending AsteriskCommandFrame: {e.__class__.__name__} ({e})"
+                )
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Write an audio frame into local buffer.
 

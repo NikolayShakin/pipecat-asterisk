@@ -227,7 +227,7 @@ class AsteriskFrameSerializer(FrameSerializer):
         Handles QUEUE_DRAINED events from Asterisk. This event indicates that Asterisk has processed all the queued media.
         We will only receive this event if we requested it by sending "REPORT_QUEUE_DRAINED", and only once per one "REPORT_QUEUE_DRAINED".
         Effectively, this means that Asterisk stopped playing audio to the channel(bot stopped speaking), which might be good to know in Pipecat.
-        However, sending "REPORT_QUEUE_DRAINED" is currently (April 2026) not used by the transport, so you unlikely will receive this event.
+        You can send AsteriskCommandFrame with cmd="REPORT_QUEUE_DRAINED" to the pipeline at any time from your pipeline, after that you will receive QUEUE_DRAINED event.
 
         Args:
             message: The dictionary representing of the QUEUE_DRAINED event message from Asterisk.

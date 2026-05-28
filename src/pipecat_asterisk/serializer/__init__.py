@@ -5,6 +5,6 @@
 #
 
 from .protocol import AsteriskWSProtocol
-from .serializer import AsteriskFrameSerializer
+from .serializer import AsteriskFrameSerializer, AsteriskCommandFrame
 
-__all__ = ["AsteriskWSProtocol", "AsteriskFrameSerializer"]
+__all__ = ["AsteriskWSProtocol", "AsteriskFrameSerializer", "AsteriskCommandFrame"]

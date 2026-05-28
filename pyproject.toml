@@ -20,6 +20,10 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 
+[project.urls]
+Homepage = "https://github.com/NikolayShakin/pipecat-asterisk"
+Repository = "https://github.com/NikolayShakin/pipecat-asterisk"
+
 [build-system]
 requires = ["uv_build>=0.10.0,<0.11.0"]
 build-backend = "uv_build"
