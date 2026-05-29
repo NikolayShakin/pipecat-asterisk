@@ -111,3 +111,53 @@ flowchart TD
     I -->|yes| F
     I -->|no| E
 ```
+## Nuances for self-closing pipelines
+
+TTS-only pipelines, as well as any other pipelines where the `EndFrame` is queued using `task.queue_frame(EndFrame())` or `task.stop_when_done()`, suffer from the problem that the `EndFrame` leads to a closure of the WebSocket to Asterisk without regard for whether the audio has yet been played to the caller on the other side. This leads Asterisk to tear down any simple bridges of which the WebSocket channel is a member, and thus to hang up on the caller.
+
+The `QUEUE_DRAINED` event (prompted by the `REPORT_QUEUE_DRAINED` command) is a robust solution to this problem. For convenience, `AsteriskWebsocketTransport` provides an async `wait_for_queue_drain()` method that can be `await`ed in your pipeline before closure:
+
+```python
+@app.websocket("/tts")
+async def tts_endpoint(websocket: WebSocket):
+    await websocket.accept()
+
+    ws_transport = AsteriskWebsocketTransport(websocket=websocket)
+
+    ...
+
+    pipeline = Pipeline([
+        ws_transport.input(),
+        tts,
+        ws_transport.output(),
+    ])
+
+    task = PipelineTask(pipeline)
+
+    # Run the pipeline, etc.
+
+    # Await queue drain on Asterisk side, then shut down.
+    await ws_transport.wait_for_queue_drain()
+    await task.stop_when_done()
+```
+
+Timing and order are important. One cannot send a `REPORT_QUEUE_DRAINED` request before media has actually been pushed to Asterisk's buffer, otherwise a `QUEUE_DRAINED` event will return immediately because the buffer is, as yet, empty. In practice, the execution of a pipeline as above may be bifurcated:
+
+```python
+@app.websocket("/tts")
+async def tts_endpoint(websocket: WebSocket):
+    ...
+    
+    runner = PipelineRunner(handle_sigint=False)
+    runner_task = asyncio.create_task(runner.run(task))
+
+    try:
+        await task.queue_frame(TTSSpeakFrame("Hello World"))
+        await ws_transport.wait_for_queue_drain()
+        await task.stop_when_done()
+        await runner_task # join async runner Task
+    except Exception:
+        runner_task.cancel()
+```
+
+Other elements would likely be required, such as a `FrameProcessor` that waits for a `TTSStoppedFrame` and fires an `asyncio.Event` or similar. These are beyond the scope of this project, but the clear intent is to say that calling `ws_transport.wait_for_queue_drain()` without being sure that something is remotely buffered first will likely not yield desired results.

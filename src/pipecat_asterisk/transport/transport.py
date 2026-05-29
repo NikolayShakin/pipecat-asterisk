@@ -4,6 +4,9 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 
+import asyncio
+import time
+
 from fastapi import WebSocket
 from loguru import logger
 from pipecat.transports.websocket.fastapi import (
@@ -44,6 +47,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             )
         super().__init__(transport, client, params)
         self._flow_controller = None
+        self._queue_drain_monitor = asyncio.Event()
 
     async def _media_start_handler(self, frame: InputTransportMessageFrame):
         """Handle the MEDIA_START event.
@@ -92,6 +96,46 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 f"{self} exception sending START_MEDIA_BUFFERING: {e.__class__.__name__} ({e})"
             )
 
+    """Ask Asterisk's `chan_websocket` to report QUEUE_DRAINED in the future, so that we know
+    when audio has been played out on the UX side.
+    """
+    async def _request_queue_drained(self):
+        if self._client.is_closing or not self._client.is_connected:
+            logger.warning(
+                f"Cannot send REPORT_QUEUE_DRAINED command because the WebSocket client is closing or already closed."
+            )
+            return
+        if not self._params.serializer:
+            logger.error(
+                f"Cannot send REPORT_QUEUE_DRAINED command because no serializer is set in the transport parameters."
+            )
+            return
+        try:
+            cmd = await self._params.serializer.serialize(AsteriskCommandFrame("REPORT_QUEUE_DRAINED"))
+            if cmd:
+                await self._client.send(cmd)
+                logger.info(f"Sent REPORT_QUEUE_DRAINED command to Asterisk WebSocket channel to enable audio buffering.")
+        except Exception as e:
+            logger.error(f"{self} exception sending REPORT_QUEUE_DRAINED: {e.__class__.__name__} ({e})")
+  
+    """Async-wait until queue drain monitor Event is fired.
+    """
+    async def _wait_for_queue_drain(self, timeout: int = 30):
+        await self._request_queue_drained()
+
+        logger.debug(f"Waiting for QUEUE_DRAINED report with a timeout of {timeout} sec")
+
+        start_time = time.monotonic()
+        
+        try:
+            await asyncio.wait_for(self._queue_drain_monitor.wait(), timeout=timeout)
+            elapsed_sec = time.monotonic() - start_time
+            logger.info(f"Received QUEUE_DRAINED report after {elapsed_sec:.2f} sec")
+        except asyncio.TimeoutError:
+            logger.debug("Timed out waiting for queue drain monitor")
+        finally:
+            self._queue_drain_monitor.clear()
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process outgoing frames.
 
@@ -105,11 +149,13 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             # Drop any buffered audio in local and remote buffers to avoid replaying stale PCM
             if self._flow_controller:
                 self._flow_controller.drop_buffer()
-        elif (
-            isinstance(frame, InputTransportMessageFrame)
-            and frame.message.get("event", None) == "MEDIA_START"
-        ):
-            await self._media_start_handler(frame)
+        elif isinstance(frame, InputTransportMessageFrame):
+            ev_type = frame.message.get("event", None)
+            
+            if ev_type == "MEDIA_START":
+                await self._media_start_handler(frame)
+            elif ev_type == "QUEUE_DRAINED":
+                self._queue_drain_monitor.set()
 
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Write an audio frame into local buffer.
@@ -190,3 +236,6 @@ class AsteriskWebsocketTransport(FastAPIWebsocketTransport):
         self._output = AsteriskWebsocketOutputTransport(
             self, self._client, params, name=output_name
         )
+
+    def wait_for_queue_drain(self, timeout: int = 30):
+        return self._output._wait_for_queue_drain(timeout)
