@@ -23,14 +23,7 @@ from pipecat.frames.frames import (
 from pipecat.serializers.base_serializer import FrameSerializer
 
 from .protocol import AsteriskWSProtocol
-
-
-class AsteriskCommandFrame(Frame):
-    """A frame representing a command to be sent to Asterisk WebSocket channel."""
-
-    def __init__(self, cmd: str):
-        self.cmd = cmd
-
+from ..frames import AsteriskCommandFrame
 
 class AsteriskFrameSerializer(FrameSerializer):
     """Asterisk WebSocket Serializer: Serializer for Asterisk WebSocket channel.

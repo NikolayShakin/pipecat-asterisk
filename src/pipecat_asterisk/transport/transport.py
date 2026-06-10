@@ -23,8 +23,8 @@ from pipecat.frames.frames import (
 )
 
 from .flow_controller import FlowController
-from ..serializer.serializer import AsteriskFrameSerializer, AsteriskCommandFrame
-
+from ..serializer.serializer import AsteriskFrameSerializer
+from ..frames import AsteriskCommandFrame
 
 class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
     """Subclass of FastAPIWebsocketOutputTransport to handle Asterisk WebSocket channel communication."""
