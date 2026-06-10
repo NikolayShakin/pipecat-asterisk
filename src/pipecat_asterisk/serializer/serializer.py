@@ -23,6 +23,7 @@ from pipecat.frames.frames import (
 from pipecat.serializers.base_serializer import FrameSerializer
 
 from .protocol import AsteriskWSProtocol
+from ..frames import AsteriskCommandFrame
 
 class AsteriskFrameSerializer(FrameSerializer):
     """Asterisk WebSocket Serializer: Serializer for Asterisk WebSocket channel.

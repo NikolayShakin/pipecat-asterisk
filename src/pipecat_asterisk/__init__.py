@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 
-from .serializer.serializer import AsteriskFrameSerializer, AsteriskCommandFrame
+from .serializer.serializer import AsteriskFrameSerializer
 from .transport.transport import AsteriskWebsocketTransport
 from .utils import FileAudioGenerator, WhiteNoiseGenerator
 
