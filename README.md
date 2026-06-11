@@ -1,6 +1,7 @@
 # pipecat-asterisk
 
-A [Pipecat](https://github.com/pipecat-ai/pipecat) community integration for Asterisk. 
+A [Pipecat](https://github.com/pipecat-ai/pipecat) community integration for [Asterisk](https://github.com/asterisk/asterisk).
+[PyPI package](https://pypi.org/project/pipecat-asterisk/)
 This repository provides a transport and frame serializer to connect your Asterisk with Pipecat pipelines.
 
 ## Features
@@ -8,6 +9,7 @@ This repository provides a transport and frame serializer to connect your Asteri
 - **`AsteriskWebsocketTransport`**: Handles raw audio streaming and lifecycle events natively with Asterisk.
 - **`AsteriskFrameSerializer`**: Serializer to translate Asterisk websocket JSON or plain-text payloads and raw(audio) payloads into Pipecat frames.
 - **Flow Control**: Built-in logic to manage buffer utilization between the Pipecat application and Asterisk.
+- **`AsteriskCommandFrame`**: If the frame with an arbitrary command is received by the transport, it will be sent to the Asterisk websocket channel. [The List of supported commands](https://docs.asterisk.org/Configuration/Channel-Drivers/WebSocket/#commands)
 
 ## Installation
 
