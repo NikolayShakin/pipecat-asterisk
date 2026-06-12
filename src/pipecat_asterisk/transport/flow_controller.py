@@ -81,9 +81,7 @@ class FlowController:
         self._local_buffer.append(chunk)
         self._local_buffer_size += len(chunk)
         logger.trace(
-            "Buffered {} bytes to local buffer. Local buffer size: {} bytes.",
-            len(chunk),
-            self._local_buffer_size,
+            f"Buffered {len(chunk)} bytes to local buffer. Local buffer size: {self._local_buffer_size} bytes."
         )
 
     async def flow_control(self):
@@ -175,34 +173,18 @@ class FlowController:
             await self._websocket_client.send(chunk)
             # Update the remote buffer utilization
             self._remote_buffer_utilization += len(chunk)
-            logger.debug(
-                "Sent {} bytes to websocket. Remote buffer utilization: {:.0f} bytes, {:.1f}%.",
-                len(chunk),
-                self._remote_buffer_utilization,
-                self._remote_buffer_utilization
-                / (self._psize * self.REMOTE_BUFFER_SIZE)
-                * 100,
+            logger.trace(
+                f"Sent {len(chunk)} bytes to websocket. Remote buffer utilization: {self._remote_buffer_utilization:.0f} bytes, {self._remote_buffer_utilization / (self._psize * self.REMOTE_BUFFER_SIZE) * 100:.1f}%."
             )
 
-    def close(self) -> None:
-        """Cancel the flow control task immediately.
-
-        This is the synchronous, non-graceful close: pending audio in the
-        local buffer is dropped. Callers that need to wait for the buffer to
-        drain before cancelling must use :meth:`aclose` instead, which uses
-        ``await asyncio.sleep`` so the ``flow_control`` task can actually run
-        and drain the buffer.
-        """
-        if self._flow_control is not None:
-            self._flow_control.cancel()
-
-    async def aclose(self, gracefully: bool = False) -> None:
+    async def close(self, gracefully: bool = False) -> None:
         """Cancel the flow control task, optionally draining the local buffer first.
 
         Args:
             gracefully: If True, wait until the local buffer is empty (so the
                 ``flow_control`` task has had a chance to send everything),
-                then cancel. If False, behave the same as :meth:`close`.
+                then cancel. If False, cancel immediately and drop any pending
+                audio in the local buffer.
         """
         if self._flow_control is None:
             return
