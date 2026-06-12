@@ -5,8 +5,10 @@
 #
 
 import asyncio
-from loguru import logger
 import time
+from collections import deque
+
+from loguru import logger
 from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketClient,
 )
@@ -48,7 +50,11 @@ class FlowController:
         self._ptime = ptime  # Audio chunk duration. In milliseconds
         self._psize = psize  # Audio chunk size. In bytes
         self._websocket_client = websocket_client
-        self._local_buffer = bytearray()
+        # Deque of bytes chunks (head == oldest). Total queued bytes is tracked
+        # separately so the working-range check stays O(1) without walking the
+        # deque. See `_pop_bytes` for how sends drain it.
+        self._local_buffer: deque[bytes] = deque()
+        self._local_buffer_size: int = 0
         self._remote_buffer_low_water = (
             self.REMOTE_BUFFER_LOW_WATER * self.REMOTE_BUFFER_SIZE * self._psize
         )
@@ -70,9 +76,12 @@ class FlowController:
             chunk: The audio chunk to add to the local buffer.
 
         """
-        self._local_buffer.extend(chunk)
+        if not chunk:
+            return
+        self._local_buffer.append(chunk)
+        self._local_buffer_size += len(chunk)
         logger.trace(
-            f"Buffered {len(chunk)} bytes to local buffer. Local buffer size: {len(self._local_buffer)} bytes."
+            f"Buffered {len(chunk)} bytes to local buffer. Local buffer size: {self._local_buffer_size} bytes."
         )
 
     async def flow_control(self):
@@ -100,7 +109,7 @@ class FlowController:
 
             # Flow control logic
             # First check if we have something in the local buffer
-            if len(self._local_buffer) > 0:
+            if self._local_buffer_size > 0:
                 # If the remote buffer is under the low water mark we send whatever we have in the local buffer
                 if self._remote_buffer_utilization < self._remote_buffer_low_water:
                     await self.send_chunks()
@@ -110,9 +119,39 @@ class FlowController:
                 # and we have at least twice as much free space in the remote buffer as the minimum batch size to avoid overfilling the remote buffer and causing audio dropouts on the Asterisk side.
                 elif (
                     self._remote_buffer_utilization < self._remote_buffer_high_water - self._min_batch * 2
-                ) and (len(self._local_buffer) >= self._min_batch):
+                ) and (self._local_buffer_size >= self._min_batch):
                     await self.send_chunks()
                 # If the remote buffer is above the high water mark we don't send anything and wait for the next tick to see if the remote buffer utilization has decreased enough to send more audio
+
+    def _pop_bytes(self, max_bytes: int) -> bytes:
+        """Pop up to ``max_bytes`` from the head of the local buffer.
+
+        Walks the chunk deque, popping whole chunks while they fit and slicing
+        the head chunk if the remaining budget falls below its size. The
+        returned bytes object is allocated once via ``b"".join`` regardless of
+        how many deque entries we drain. ``_local_buffer_size`` is updated in
+        lockstep so the working-range check in ``flow_control`` stays O(1).
+        """
+        if max_bytes <= 0 or self._local_buffer_size == 0:
+            return b""
+
+        parts: list[bytes] = []
+        remaining = max_bytes
+        while remaining > 0 and self._local_buffer:
+            head = self._local_buffer[0]
+            if len(head) <= remaining:
+                parts.append(self._local_buffer.popleft())
+                remaining -= len(head)
+            else:
+                parts.append(head[:remaining])
+                self._local_buffer[0] = head[remaining:]
+                remaining = 0
+
+        # `b"".join` allocates once; in the single-part case skip the join to
+        # avoid the trivial copy and reuse the existing bytes object.
+        chunk = parts[0] if len(parts) == 1 else b"".join(parts)
+        self._local_buffer_size -= len(chunk)
+        return chunk
 
     async def send_chunks(self):
         """Send audio chunks from the local buffer to websocket (effectively to the remote buffer on the Asterisk side).
@@ -124,37 +163,42 @@ class FlowController:
 
         # Calculate the number of bytes to send
         bytes_to_send = min(
-            len(self._local_buffer), self.MAX_WS_SEND
+            self._local_buffer_size, self.MAX_WS_SEND
         )  # Ensure we don't exceed the websocket maximum message size
         if bytes_to_send > 0:
-            # Take the bytes to send from the local buffer
-            chunk = bytes(self._local_buffer[:bytes_to_send])
-            del self._local_buffer[:bytes_to_send]
+            # Take the bytes to send from the head of the local buffer
+            chunk = self._pop_bytes(bytes_to_send)
 
             # Send the chunk to the websocket
             await self._websocket_client.send(chunk)
             # Update the remote buffer utilization
             self._remote_buffer_utilization += len(chunk)
-            logger.debug(
+            logger.trace(
                 f"Sent {len(chunk)} bytes to websocket. Remote buffer utilization: {self._remote_buffer_utilization:.0f} bytes, {self._remote_buffer_utilization / (self._psize * self.REMOTE_BUFFER_SIZE) * 100:.1f}%."
             )
 
-    def close(self, gracefully: bool = False):
-        """Cancel the flow control task and optionally wait for the local buffer to be sent before cancelling.
+    async def close(self, gracefully: bool = False) -> None:
+        """Cancel the flow control task, optionally draining the local buffer first.
 
         Args:
-            gracefully: If True, wait for the local buffer to be sent before cancelling the flow control
+            gracefully: If True, wait until the local buffer is empty (so the
+                ``flow_control`` task has had a chance to send everything),
+                then cancel. If False, cancel immediately and drop any pending
+                audio in the local buffer.
         """
-        if self._flow_control:
-            if gracefully:
-                logger.info(
-                    f"Gracefully closing flow controller. Waiting for local buffer to be sent..."
-                )
-                while len(self._local_buffer) > 0:
-                    time.sleep(
-                        self._ptime / 1000
-                    )  # Sleep for the duration of one audio chunk to give the flow control loop time to send the remaining audio in the local buffer
-            self._flow_control.cancel()
+        if self._flow_control is None:
+            return
+        if gracefully:
+            logger.info(
+                "Gracefully closing flow controller. Waiting for local buffer to be sent..."
+            )
+            # Sleep one chunk-duration at a time on the event loop, allowing
+            # the flow_control task to keep draining `_local_buffer`. Using
+            # `time.sleep` here would block the event loop and prevent the
+            # very draining we're waiting on.
+            while self._local_buffer_size > 0:
+                await asyncio.sleep(self._ptime / 1000)
+        self._flow_control.cancel()
 
     def drop_buffer(self):
         """Drop any buffered audio in the local buffer and reset remote buffer utilization to zero.
@@ -162,4 +206,5 @@ class FlowController:
         This is used when an interruption/stop/cancel frame is processed to avoid replaying stale audio.
         """
         self._local_buffer.clear()
+        self._local_buffer_size = 0
         self._remote_buffer_utilization = 0.0
