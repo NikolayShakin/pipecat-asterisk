@@ -120,14 +120,13 @@ class AsteriskFrameSerializer(FrameSerializer):
         message_type = message.get("event")
         if message_type is None:
             logger.warning(
-                "Received Asterisk WebSocket message without 'event' field: {}",
-                message,
+                f"Received Asterisk WebSocket message without 'event' field: {message}"
             )
             return None
         handler = self._event_handlers.get(message_type)
         if handler is not None:
             return handler(message)
-        logger.info("Received unhandled Asterisk WebSocket event: {}", message)
+        logger.info(f"Received unhandled Asterisk WebSocket event: {message}")
         return None
 
     ### Asterisk Event handlers ###
@@ -445,9 +444,7 @@ class AsteriskFrameSerializer(FrameSerializer):
         if async_handler is not None:
             return await async_handler(frame)
         logger.trace(
-            "Received unhandled frame type in Asterisk WebSocket serializer: {}. Frame: {}",
-            frame_type,
-            frame,
+            f"Received unhandled frame type in Asterisk WebSocket serializer: {frame_type}. Frame: {frame}"
         )
         return None
 

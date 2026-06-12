@@ -57,21 +57,14 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
 
         if ptime <= 0 or psize <= 0:
             logger.error(
-                "Invalid ptime ({}) or psize ({}) in MEDIA_START event {}. Cannot initialize flow controller.",
-                ptime,
-                psize,
-                frame.message,
+                f"Invalid ptime ({ptime}) or psize ({psize}) in MEDIA_START event {frame.message}. Cannot initialize flow controller."
             )
             return
 
         self._flow_controller = FlowController(ptime, psize, self._client)
 
         logger.debug(
-            "Initialized flow controller with ptime={} ms, psize={} bytes. Remote buffer low water mark: {} bytes, high water mark: {} bytes.",
-            ptime,
-            psize,
-            self._flow_controller._remote_buffer_low_water,
-            self._flow_controller._remote_buffer_high_water,
+            f"Initialized flow controller with ptime={ptime} ms, psize={psize} bytes. Remote buffer low water mark: {self._flow_controller._remote_buffer_low_water} bytes, high water mark: {self._flow_controller._remote_buffer_high_water} bytes."
         )
 
         # Send START_MEDIA_BUFFERING command to Asterisk WebSocket channel to enable audio buffering on the Asterisk side
@@ -96,10 +89,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 )
         except Exception as e:
             logger.error(
-                "{} exception sending START_MEDIA_BUFFERING: {} ({})",
-                self,
-                e.__class__.__name__,
-                e,
+                f"{self} exception sending START_MEDIA_BUFFERING: {e.__class__.__name__} ({e})"
             )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -166,8 +156,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                     return True
                 else:
                     logger.error(
-                        "Serialized audio frame is not bytes. Got {} instead. Cannot write audio frame.",
-                        type(payload),
+                        f"Serialized audio frame is not bytes. Got {type(payload)} instead. Cannot write audio frame."
                     )
                     return False
             else:
@@ -176,12 +165,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 )
                 return False
         except Exception as e:
-            logger.error(
-                "{} exception sending data: {} ({})",
-                self,
-                e.__class__.__name__,
-                e,
-            )
+            logger.error(f"{self} exception sending data: {e.__class__.__name__} ({e})")
             return False
 
 
