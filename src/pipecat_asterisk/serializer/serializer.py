@@ -4,8 +4,7 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 
-import inspect
-from typing import Awaitable, Callable, Optional, cast
+from typing import Awaitable, Callable, Optional
 from loguru import logger
 from pipecat.audio.dtmf.types import KeypadEntry
 from pipecat.audio.utils import create_stream_resampler
@@ -71,28 +70,58 @@ class AsteriskFrameSerializer(FrameSerializer):
             sample_rate
         )  # What sample rate is used in Asterisk websocket channel. If 0, will be populated during setup or from MEDIA_START event
 
-    def _handle_event(self, message: dict) -> Frame | None:
-        """Call the event handler if the handler is defined in the class, otherwise return None.
+        # Pre-built dispatch tables for `serialize`. Keyed by frame class so
+        # `serialize` does a single dict lookup per frame instead of
+        # `getattr(self, f"_frame_{type(frame).__name__.lower()}")` + an
+        # `inspect.isawaitable` check on the hot path. Async handlers are
+        # kept in a separate table so we know at lookup time whether to
+        # `await` the result.
+        self._sync_frame_handlers: dict[type, Callable[[Frame], str | bytes | None]] = {
+            AsteriskCommandFrame: self._frame_asteriskcommandframe,
+            EndFrame: self._frame_endframe,
+            CancelFrame: self._frame_cancelframe,
+            InterruptionFrame: self._frame_interruptionframe,
+        }
+        self._async_frame_handlers: dict[
+            type, Callable[[Frame], Awaitable[str | bytes | None]]
+        ] = {
+            OutputAudioRawFrame: self._frame_outputaudiorawframe,
+        }
 
-        The handler methods should be named as "_ev_{event_name.lower()}" and should take the event message as a dictionary and return a Frame or None.
+        # Event handlers are keyed by Asterisk event-name string, matching
+        # the values produced by the protocol parser. All handlers are sync
+        # so one table is enough; same goal as the frame tables - skip the
+        # per-event `getattr` + `f"_ev_{name.lower()}"` lookup.
+        self._event_handlers: dict[str, Callable[[dict], Frame | None]] = {
+            "MEDIA_START": self._ev_media_start,
+            "MEDIA_XOFF": self._ev_media_xoff,
+            "MEDIA_XON": self._ev_media_xon,
+            "DTMF_END": self._ev_dtmf_end,
+            "QUEUE_DRAINED": self._ev_queue_drained,
+        }
+
+    def _handle_event(self, message: dict) -> Frame | None:
+        """Dispatch an Asterisk event through the precomputed handler table.
+
+        The event-handler table is built once in ``__init__`` and keyed by
+        the exact event-name string Asterisk sends. Unknown events fall
+        through to the same warning path as the original reflective form.
 
         Args:
             message: The event message as a dictionary.
         """
 
-        message_type = message.get("event", None)
+        message_type = message.get("event")
         if message_type is None:
             logger.warning(
                 f"Received Asterisk WebSocket message without 'event' field: {message}"
             )
             return None
-        handler = getattr(self, f"_ev_{message_type.lower()}", None)
-        if callable(handler):
-            typed_handler = cast(Callable[[dict], Frame | None], handler)
-            return typed_handler(message)
-        else:
-            logger.info(f"Received unhandled Asterisk WebSocket event: {message}")
-            return None
+        handler = self._event_handlers.get(message_type)
+        if handler is not None:
+            return handler(message)
+        logger.info(f"Received unhandled Asterisk WebSocket event: {message}")
+        return None
 
     ### Asterisk Event handlers ###
 
@@ -389,24 +418,29 @@ class AsteriskFrameSerializer(FrameSerializer):
     async def serialize(self, frame: Frame) -> str | bytes | None:
         """Convert a frame to its serialized representation suitable for Asterisk WebSocket channel.
 
+        Looks up the frame's exact type in the precomputed sync/async
+        dispatch tables built in ``__init__``. This avoids the per-frame
+        ``getattr`` + f-string + ``inspect.isawaitable`` overhead the old
+        reflective form paid, which matters because audio frames go through
+        this method dozens of times per second.
+
         Args:
             frame: The frame to serialize.
 
         Returns:
             Serialized frame data as string, bytes, or None if serialization fails.
         """
-        handler = getattr(self, f"_frame_{type(frame).__name__.lower()}", None)
-        if callable(handler):
-            result = handler(frame)
-            if inspect.isawaitable(result):
-                return cast(str | bytes | None, await result)
-            else:
-                return cast(str | bytes | None, result)
-        else:
-            logger.trace(
-                f"Received unhandled frame type in Asterisk WebSocket serializer: {type(frame)}. Frame: {frame}"
-            )
-            return None
+        frame_type = type(frame)
+        sync_handler = self._sync_frame_handlers.get(frame_type)
+        if sync_handler is not None:
+            return sync_handler(frame)
+        async_handler = self._async_frame_handlers.get(frame_type)
+        if async_handler is not None:
+            return await async_handler(frame)
+        logger.trace(
+            f"Received unhandled frame type in Asterisk WebSocket serializer: {frame_type}. Frame: {frame}"
+        )
+        return None
 
     async def deserialize(self, data: str | bytes) -> Frame | None:
         """Convert serialized data from Asterisk's websocket channel to a frame object.
