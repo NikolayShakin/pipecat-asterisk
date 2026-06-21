@@ -32,5 +32,11 @@ build-backend = "uv_build"
 dev = [
     "dotenv>=0.9.9",
     "pipecat-ai[google,silero]>=1.1.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
     "uvicorn>=0.46.0",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
