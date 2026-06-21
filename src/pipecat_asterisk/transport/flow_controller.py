@@ -196,7 +196,7 @@ class FlowController:
             # the flow_control task to keep draining `_local_buffer`. Using
             # `time.sleep` here would block the event loop and prevent the
             # very draining we're waiting on.
-            while self._local_buffer_size > 0:
+            while self._local_buffer_size > 0 or self._remote_buffer_utilization > 0:
                 await asyncio.sleep(self._ptime / 1000)
         self._flow_control.cancel()
 
