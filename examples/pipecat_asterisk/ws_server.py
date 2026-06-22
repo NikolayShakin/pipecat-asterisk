@@ -12,11 +12,11 @@ from fastapi import FastAPI, WebSocket
 import sys
 from loguru import logger
 
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.workers.runner import WorkerRunner
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
@@ -83,28 +83,26 @@ async def run_bot(websocket_client):
         ]
     )
 
-    task = PipelineTask(
+    worker = PipelineWorker(
         pipeline,
     )
 
     @ws_transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("Pipecat client connected.")
-        # Kick off the conversation as soon as the WebSocket connection is established
-        await task.queue_frames([LLMRunFrame()])
+        await worker.queue_frames([LLMRunFrame()])
 
     @ws_transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.info("Pipecat Client disconnected")
-        await task.cancel()
+        await worker.cancel()
 
-    runner = PipelineRunner(handle_sigint=False)
+    runner = WorkerRunner(handle_sigint=False)
 
-    await runner.run(task)
-
+    await runner.add_workers(worker)
+    await runner.run()
 
 app = FastAPI()
-
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
