@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: BSD-2-Clause
 #
 
-import inspect
-from typing import Awaitable, Callable, Optional, cast
+from inspect import iscoroutinefunction
+from typing import Awaitable, Callable, Optional
 from loguru import logger
 from pipecat.audio.dtmf.types import KeypadEntry
 from pipecat.audio.utils import create_stream_resampler
@@ -25,6 +25,11 @@ from pipecat.serializers.base_serializer import FrameSerializer
 from .protocol import AsteriskWSProtocol
 from ..frames import AsteriskCommandFrame
 
+def handler(event_name):
+    def decorator(func):
+        func._event_name = event_name
+        return func
+    return decorator
 
 class AsteriskFrameSerializer(FrameSerializer):
     """Asterisk WebSocket Serializer: Serializer for Asterisk WebSocket channel.
@@ -45,11 +50,9 @@ class AsteriskFrameSerializer(FrameSerializer):
             - when an InterruptionFrame is processed we send FLUSH_MEDIA to Asterisk websocket channel.
             - when an OutputAudioRawFrame is processed we send the raw audio bytes to Asterisk websocket channel, after resampling if needed.
 
-        Some of the event handlers are just placeholders for now, they just log the received events, but they can be extended if needed.
-        In case you need to add more event handlers you can add more methods with the naming convention "_ev_{event_name.lower()}"
-        and they will be called automatically when the corresponding event is received from Asterisk.
-        The same applies for frame handlers, you can add more methods with the naming convention "_frame_{frame_type.lower()}"
-        and they will be called automatically when the corresponding frame type is processed in serialize method.
+        Some of the event handlers are just placeholders for now, they log the received events, but they can be extended if needed.
+        In case you need to add more Asterisk event handlers or Pipecat frame handlers, you can add them as methods of the class using the @handler decorator. 
+        @handler(Frame) for Pipecat frame handlers and @handler("EVENT_NAME") for Asterisk event handlers. They will be automatically registered.
     """
 
     # Asterisk slin sample rates supported by default, you can check it on your Asterisk with CLI>'core show codecs audio'
@@ -71,10 +74,35 @@ class AsteriskFrameSerializer(FrameSerializer):
             sample_rate
         )  # What sample rate is used in Asterisk websocket channel. If 0, will be populated during setup or from MEDIA_START event
 
-    def _handle_event(self, message: dict) -> Frame | None:
-        """Call the event handler if the handler is defined in the class, otherwise return None.
+        self._sync_frame_handlers: dict[type, Callable[[Frame], str | bytes | None]] = {}
+        self._async_frame_handlers: dict[type, Callable[[Frame], Awaitable[str | bytes | None]]] = {}
+        self._sync_event_handlers: dict[str, Callable[[dict], Frame | None]] = {}
+        self._async_event_handlers: dict[str, Callable[[dict], Awaitable[Frame | None]]] = {}
 
-        The handler methods should be named as "_ev_{event_name.lower()}" and should take the event message as a dictionary and return a Frame or None.
+        # Binding event/frame handlers based on the "_event_name" attribute set by the @handler decorator
+        for method_name in dir(self):
+            method = getattr(self, method_name, None)
+            if method is None:
+                continue
+
+            event_name = getattr(method, "_event_name", None)
+
+            if event_name:
+                if isinstance(event_name, str): # Asterisk event handler
+                    if iscoroutinefunction(method):# Async event handler
+                        self._async_event_handlers[event_name] = method
+                    else: # Sync event handler
+                        self._sync_event_handlers[event_name] = method
+                elif issubclass(event_name, Frame): # Frame handler
+                    if iscoroutinefunction(method):# Async frame handler
+                        self._async_frame_handlers[event_name] = method
+                    else: # Sync frame handler
+                        self._sync_frame_handlers[event_name] = method
+                else:
+                    logger.warning(f"Invalid handler method {method_name}, event type should be str for Asterisk events or subclass of Frame for Pipecat frames, got {type(event_name)} instead.")
+
+    async def _handle_event(self, message: dict) -> Frame | None: # Asterisk events handler
+        """Dispatch an Asterisk event.
 
         Args:
             message: The event message as a dictionary.
@@ -86,17 +114,24 @@ class AsteriskFrameSerializer(FrameSerializer):
                 f"Received Asterisk WebSocket message without 'event' field: {message}"
             )
             return None
-        handler = getattr(self, f"_ev_{message_type.lower()}", None)
-        if callable(handler):
-            typed_handler = cast(Callable[[dict], Frame | None], handler)
-            return typed_handler(message)
-        else:
-            logger.info(f"Received unhandled Asterisk WebSocket event: {message}")
-            return None
+
+        # try to find sync handler first
+        handler = self._sync_event_handlers.get(message_type, None)
+        if handler is not None:
+            return handler(message)
+
+        # if sync handler is not found, try async handlers
+        async_handler = self._async_event_handlers.get(message_type, None)
+        if async_handler is not None:
+            return await async_handler(message)
+
+        # If no handler is found, log the event and return None
+        logger.info(f"Received unhandled Asterisk WebSocket event: {message}")
+        return None
 
     ### Asterisk Event handlers ###
-
-    def _ev_media_start(self, message: dict) -> Frame | None:
+    @handler("MEDIA_START")
+    def _media_start(self, message: dict) -> Frame | None:
         """MEDIA_START event handler.
 
         MEDIA_START event is the first one we receive from Asterisk.
@@ -163,7 +198,8 @@ class AsteriskFrameSerializer(FrameSerializer):
 
         return InputTransportMessageFrame(message=message)
 
-    def _ev_media_xoff(self, message: dict) -> Frame | None:
+    @handler("MEDIA_XOFF")
+    def _media_xoff(self, message: dict) -> Frame | None:
         """MEDIA_XOFF event handler.
 
         The Asterisk's websocket channel driver will send this event when the frame queue length reaches the high water (XOFF) level.
@@ -178,7 +214,8 @@ class AsteriskFrameSerializer(FrameSerializer):
         )
         return None
 
-    def _ev_media_xon(self, message: dict) -> Frame | None:
+    @handler("MEDIA_XON")
+    def _media_xon(self, message: dict) -> Frame | None:
         """MEDIA_XON event handler.
 
         The Asterisk's websocket channel driver will send this event when the frame queue length drops below the low water (XON) level.
@@ -192,8 +229,9 @@ class AsteriskFrameSerializer(FrameSerializer):
             f"Received MEDIA_XON event from Asterisk: {message}. Asterisk audio buffer is ready to receive audio again."
         )
         return None
-
-    def _ev_dtmf_end(self, message: dict) -> Frame | None:
+    
+    @handler("DTMF_END")
+    def _dtmf_end(self, message: dict) -> Frame | None:
         """DTMF_END event handler.
 
         Handles DTMF_END events from Asterisk and converts them to InputDTMFFrame.
@@ -214,7 +252,8 @@ class AsteriskFrameSerializer(FrameSerializer):
                 return None
         return None
 
-    def _ev_queue_drained(self, message: dict) -> Frame | None:
+    @handler("QUEUE_DRAINED")
+    def _queue_drained(self, message: dict) -> Frame | None:
         # TODO: add REPORT_QUEUE_DRAINED support in the transport
         """QUEUE_DRAINED event handler.
 
@@ -233,7 +272,8 @@ class AsteriskFrameSerializer(FrameSerializer):
 
     #### Pipecat Frame handlers ####
 
-    async def _frame_outputaudiorawframe(
+    @handler(OutputAudioRawFrame)
+    async def _output_audio_raw_frame(
         self, frame: OutputAudioRawFrame
     ) -> Optional[bytes]:
         """OutputAudioRawFrame handler.
@@ -280,7 +320,8 @@ class AsteriskFrameSerializer(FrameSerializer):
                     return None
                 return resampled_audio
 
-    def _frame_asteriskcommandframe(self, frame: AsteriskCommandFrame) -> str:
+    @handler(AsteriskCommandFrame)
+    def _asterisk_command_frame(self, frame: AsteriskCommandFrame) -> str:
         """AsteriskCommandFrame handler.
 
         Returns properly formatted arbitrary command for Asterisk WebSocket channel when an AsteriskCommandFrame is processed, using the command string provided in the frame.
@@ -290,7 +331,8 @@ class AsteriskFrameSerializer(FrameSerializer):
         """
         return self._asterisk_ws_proto.build(frame.cmd)
 
-    def _frame_endframe(self, frame: EndFrame) -> str:
+    @handler(EndFrame)
+    def _end_frame(self, frame: EndFrame) -> str:
         """EndFrame handler. Terminate the call on Asterisk by sending HANGUP command when an EndFrame is processed.
 
         Returns properly formatted HANGUP command for Asterisk WebSocket channel when an EndFrame is processed, indicating that the call should be terminated.
@@ -300,7 +342,8 @@ class AsteriskFrameSerializer(FrameSerializer):
         """
         return self._asterisk_ws_proto.build("HANGUP")
 
-    def _frame_cancelframe(self, frame: CancelFrame) -> str:
+    @handler(CancelFrame)
+    def _cancel_frame(self, frame: CancelFrame) -> str:
         """CancelFrame handler. Terminate the call on Asterisk by sending HANGUP command when a CancelFrame is processed.
 
         Returns properly formatted HANGUP command for Asterisk WebSocket channel when a CancelFrame is processed, indicating that the call should be terminated.
@@ -310,7 +353,8 @@ class AsteriskFrameSerializer(FrameSerializer):
         """
         return self._asterisk_ws_proto.build("HANGUP")
 
-    def _frame_interruptionframe(self, frame: InterruptionFrame) -> str:
+    @handler(InterruptionFrame)
+    def _interruption_frame(self, frame: InterruptionFrame) -> str:
         """InterruptionFrame handler.
 
         Returns properly formatted FLUSH_MEDIA command for Asterisk WebSocket channel when an InterruptionFrame is processed,
@@ -395,18 +439,17 @@ class AsteriskFrameSerializer(FrameSerializer):
         Returns:
             Serialized frame data as string, bytes, or None if serialization fails.
         """
-        handler = getattr(self, f"_frame_{type(frame).__name__.lower()}", None)
-        if callable(handler):
-            result = handler(frame)
-            if inspect.isawaitable(result):
-                return cast(str | bytes | None, await result)
-            else:
-                return cast(str | bytes | None, result)
-        else:
-            logger.trace(
-                f"Received unhandled frame type in Asterisk WebSocket serializer: {type(frame)}. Frame: {frame}"
-            )
-            return None
+        frame_type = type(frame)
+        sync_handler = self._sync_frame_handlers.get(frame_type, None)
+        if sync_handler is not None:
+            return sync_handler(frame)
+        async_handler = self._async_frame_handlers.get(frame_type, None)
+        if async_handler is not None:
+            return await async_handler(frame)
+        logger.trace(
+            f"Received unhandled frame type in Asterisk WebSocket serializer: {frame_type}. Frame: {frame}"
+        )
+        return None
 
     async def deserialize(self, data: str | bytes) -> Frame | None:
         """Convert serialized data from Asterisk's websocket channel to a frame object.
@@ -449,7 +492,7 @@ class AsteriskFrameSerializer(FrameSerializer):
             event = self._asterisk_ws_proto.parse(data)
 
             if event is not None:
-                return self._handle_event(event)
+                return await self._handle_event(event)
             else:
                 logger.warning(
                     f"Failed to parse Asterisk WebSocket event from data: {data}"

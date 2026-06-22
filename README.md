@@ -24,8 +24,8 @@ Here is a basic example of how to integrate the Asterisk WebSocket transport int
 
 ```python
 from fastapi import FastAPI, WebSocket
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.task import PipelineTask
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.workers.runner import WorkerRunner
 from pipecat_asterisk import AsteriskWebsocketTransport
 
 app = FastAPI()
@@ -44,10 +44,16 @@ async def websocket_endpoint(websocket: WebSocket):
         ws_transport.output(),
     ])
     
-    task = PipelineTask(pipeline)
-    
-    # Run the pipeline
-    # ...
+    # Add the pipeline to a worker and run it
+    worker = PipelineWorker(
+        pipeline,
+    )
+    ...
+    # Run the worker
+    runner = WorkerRunner(handle_sigint=False)
+    await runner.add_workers(worker)
+    await runner.run()
+    ...
 ```
 
 ## Running the Example
