@@ -16,3 +16,14 @@
 ### Added
 - Handling for `AsteriskCommandFrame` in the transport, which allows sending arbitrary commands to the Asterisk websocket channel.
 - Project structure improved, frames moved to a separate module `frames.py` thanks to the contribution of @abalashov.
+
+## [0.1.3] - 2026-06-24
+### Added
+- Added unit tests, thanks to the contribution of @Salman778
+### Changed
+- Improved performance, thanks to the contribution of @Salman778
+- Improved API, added decorator `@handler` for registering event and frame handlers in the serializer
+- Handlers can be sync/async, and they are automatically registered to a respective dictionary
+- Flow controller's `close` function is now async
+- Improved documentation
+- Updated examples
