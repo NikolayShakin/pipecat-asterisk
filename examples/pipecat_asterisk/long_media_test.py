@@ -13,8 +13,9 @@ from loguru import logger
 
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineTask
+from pipecat.pipeline.worker import PipelineWorker
+from pipecat.workers.runner import WorkerRunner
+from pipecat.pipeline.task import PipelineParams 
 
 from pipecat_asterisk import AsteriskWebsocketTransport, FileAudioGenerator, WhiteNoiseGenerator
 
@@ -28,7 +29,7 @@ async def run_bot(websocket_client):
     ws_transport = AsteriskWebsocketTransport(websocket=websocket_client)
 
     # white_noise = WhiteNoiseGenerator(sampling_rate=16000)
-    audio_file_generator = FileAudioGenerator(sampling_rate=16000, file_path="slin16_1k.raw")
+    audio_file_generator = FileAudioGenerator(sampling_rate=24000, file_path="1-24khz.raw")
 
     pipeline = Pipeline(
         [
@@ -39,22 +40,28 @@ async def run_bot(websocket_client):
         ]
     )
 
-    task = PipelineTask(
+    worker = PipelineWorker(
         pipeline,
+        params=PipelineParams(
+            audio_out_sample_rate=24000,
+            audio_in_sample_rate=24000,
+        )
     )
 
     @ws_transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        # Kick off the conversation as soon as the WebSocket connection is established
-        await task.queue_frames([LLMRunFrame()])
+        logger.info("Pipecat client connected.")
+        await worker.queue_frames([LLMRunFrame()])
 
     @ws_transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        await task.cancel()
+        logger.info("Pipecat Client disconnected")
+        await worker.cancel()
 
-    runner = PipelineRunner(handle_sigint=False)
+    runner = WorkerRunner(handle_sigint=False)
 
-    await runner.run(task)
+    await runner.add_workers(worker)
+    await runner.run()
 
 
 app = FastAPI()

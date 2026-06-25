@@ -20,11 +20,19 @@ uv add pipecat-asterisk
 
 ## Usage
 
+> Understanding sampling rates:: 
+> The transport and the serializer are designed to autodetect and handle sampling rate mismatch, but it's a very good idea to have them equal to the `slin` sample rate on the Asterisk side. 
+> Otherwise, we will have double resampling that might introduce some artifacts, CPU load, and latency. Please ensure that the `audio_out_sample_rate` and `audio_in_sample_rate` 
+> parameters in the `PipelineParams` are set to match the sampling rate of the Asterisk channel. 
+> Max reasonable sampling rate for Asterisk is 48kHz in case of using Opus codec, 
+> if you don't use Opus codec, you can safely use 24kHz, it's more than enough for HD codes like G.722,
+> and if you use G.711 (typical for PSTN), 8kHz is enough.
+
 Here is a basic example of how to integrate the Asterisk WebSocket transport into a Pipecat pipeline:
 
 ```python
 from fastapi import FastAPI, WebSocket
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineWorker, PipelineParams
 from pipecat.workers.runner import WorkerRunner
 from pipecat_asterisk import AsteriskWebsocketTransport
 
@@ -47,6 +55,10 @@ async def websocket_endpoint(websocket: WebSocket):
     # Add the pipeline to a worker and run it
     worker = PipelineWorker(
         pipeline,
+        params=PipelineParams(
+            audio_out_sample_rate=48000, # It's a very good idea to have them == slin sample rate on asterisk side
+            audio_in_sample_rate=48000,  # Otherwise, we will have double resampling that might introduce some artifacts, cpu-load and latency
+        )
     )
     ...
     # Run the worker
@@ -91,6 +103,14 @@ Run the WebSocket server:
 uv sync
 uv run examples/pipecat_asterisk/ws_server.py
 ```
+
+In case you want to estimate audio quality with respect to different sampling rates, you can run:
+```bash
+cd examples/pipecat_asterisk
+uv run examples/pipecat_asterisk/long_media_test.py
+```
+The script emulates generating audio chunks from TTS service, without need to pay for a real TTS service.
+The directory contains some audio samples with different sampling rates, but your can use your own files. Save them as raw audio in `slin` (16-bit PCM, mono) format.
 
 ## Compatibility
 
