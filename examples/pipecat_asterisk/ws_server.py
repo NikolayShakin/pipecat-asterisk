@@ -12,7 +12,7 @@ from fastapi import FastAPI, WebSocket
 import sys
 from loguru import logger
 
-from pipecat.pipeline.worker import PipelineWorker
+from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.workers.runner import WorkerRunner
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import LLMRunFrame
@@ -22,6 +22,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+
 from pipecat.services.google.gemini_live.llm import GeminiLiveLLMService
 
 from pipecat_asterisk import AsteriskWebsocketTransport
@@ -85,6 +86,10 @@ async def run_bot(websocket_client):
 
     worker = PipelineWorker(
         pipeline,
+        params=PipelineParams(
+            audio_out_sample_rate=48000,
+            audio_in_sample_rate=48000,
+        )
     )
 
     @ws_transport.event_handler("on_client_connected")

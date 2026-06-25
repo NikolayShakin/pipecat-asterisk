@@ -1,6 +1,14 @@
 import asyncio
 import os
-from pipecat.frames.frames import InputTransportMessageFrame, OutputAudioRawFrame, CancelFrame
+from pipecat.frames.frames import (
+    InputTransportMessageFrame,
+    OutputAudioRawFrame,
+    CancelFrame, 
+    TTSStoppedFrame,
+    TTSAudioRawFrame,
+    TTSStartedFrame,
+    TTSStoppedFrame,
+)
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
 class AudioGenerator(FrameProcessor):
@@ -33,17 +41,26 @@ class FileAudioGenerator(AudioGenerator):
         try:
             # Load audio from file to memory
             audio_data = None
-            with open(self._file_path, "rb") as f:
-                audio_data = f.read()
-        
-            batch_size = self._sampling_rate * 2 # 1 second of audio at the given sampling rate (e.g. slin16 = 2 bytes per sample)
-            while True:
-                for i in range(0, len(audio_data), batch_size):
-                    chunk = audio_data[i:i+batch_size]
-                    frame = OutputAudioRawFrame(audio=chunk, sample_rate=self._sampling_rate, num_channels=1)
-                    await self.push_frame(frame)
-                    await asyncio.sleep(0.1)
-                await asyncio.sleep(5)
+            try:
+                with open(self._file_path, "rb") as f:
+                    audio_data = f.read()
+                    batch_size = self._sampling_rate * 2 # 1 second of audio at the given sampling rate (e.g. slin = 2 bytes per sample)
+                    while True:
+                        await self.push_frame(TTSStartedFrame())
+                        for i in range(0, len(audio_data), batch_size):
+                            chunk = audio_data[i:i+batch_size]
+                            frame = TTSAudioRawFrame(
+                                audio=chunk,
+                                sample_rate=self._sampling_rate,
+                                num_channels=1,
+                            )
+                            await self.push_frame(frame)
+                            await asyncio.sleep(0.2)
+
+                        await self.push_frame(TTSStoppedFrame())
+                        await asyncio.sleep(5)
+            except FileNotFoundError:
+                print(f"File not found: {self._file_path} in the current working directory: {os.getcwd()}")
         except asyncio.CancelledError:
             pass
 
