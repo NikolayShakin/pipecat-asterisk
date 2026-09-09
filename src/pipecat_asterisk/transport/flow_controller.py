@@ -111,7 +111,7 @@ class FlowController:
             # Flow control logic
             # First check if we have something in the local buffer
             if self._local_buffer_size > 0:
-                # Bot clear bot stopped speaking fence if we have something to send
+                # Clear the bot-stopped-speaking fence if we have something to send
                 if self.bot_stopped_speaking_fence.is_set():
                     self.bot_stopped_speaking_fence.clear()
                     logger.trace("Bot started speaking, cleared bot_stopped_speaking_fence.")
@@ -130,7 +130,7 @@ class FlowController:
                 # If the remote buffer is above the high water mark we don't send anything and wait for the next tick to see if the remote buffer utilization has decreased enough to send more audio
 
             if not self.bot_stopped_speaking_fence.is_set() and self._remote_buffer_utilization == 0:
-                # If the remote buffer is empty  buffer we can assume that the bot has stopped speaking
+                # If the remote buffer is empty we can assume that the bot has stopped speaking
                 self.bot_stopped_speaking_fence.set()  # Signal that the bot has effectively stopped speaking
                 logger.trace("Bot has stopped speaking, set bot_stopped_speaking_fence.")
 

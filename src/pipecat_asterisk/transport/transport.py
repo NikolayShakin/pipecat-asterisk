@@ -145,7 +145,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 # Hold them
                 await self._flow_controller.bot_stopped_speaking_fence.wait()
                 logger.debug("Bot effectively stopped speaking. Sending BotStoppedSpeakingFrame to the pipeline.")
-        await super().push_frame(frame)
+        await super().push_frame(frame, direction)
     
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Write an audio frame into local buffer.
