@@ -27,3 +27,9 @@
 - Flow controller's `close` function is now async
 - Improved documentation
 - Updated examples
+
+## [0.1.4] - 2026-09-09
+### Added
+- Remote buffer monitor for debugging the state of the remote audio buffer.
+### Fixed
+- Fixed issue early triggering of bot-stopped-speaking event.

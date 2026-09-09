@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-2-Clause
 #
+import asyncio
 
 from fastapi import WebSocket
 from loguru import logger
@@ -20,6 +21,7 @@ from pipecat.frames.frames import (
     StopFrame,
     InputTransportMessageFrame,
     OutputAudioRawFrame,
+    TTSStoppedFrame,
 )
 
 from .flow_controller import FlowController
@@ -34,7 +36,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         transport: "AsteriskWebsocketTransport",
         client: FastAPIWebsocketClient,
         params: FastAPIWebsocketParams | None = None,
-        name: str | None = None,
+        **kwargs,
     ):
         if params is None:
             params = FastAPIWebsocketParams(
@@ -42,8 +44,20 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 audio_in_enabled=True,
                 audio_out_enabled=True,
             )
-        super().__init__(transport, client, params)
+        super().__init__(transport, client, params, **kwargs)
         self._flow_controller = None
+        self._debug_asterisk_status = kwargs.get('debug_asterisk_status', False)
+
+    async def serialize(self, frame: Frame) -> bytes | str | None:
+        """Serialize a frame to bytes using the serializer in transport parameters."""
+        if not self._params.serializer:
+            logger.error(f"Cannot serialize the frame {type(frame)} because no serializer is set in transport parameters.")
+            return None
+        try:
+            return await self._params.serializer.serialize(frame)
+        except Exception as e:
+            logger.error(f"{self} exception serializing frame: {e.__class__.__name__} ({e})")
+            return None
 
     async def _media_start_handler(self, frame: InputTransportMessageFrame):
         """Handle the MEDIA_START event.
@@ -68,28 +82,35 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         )
 
         # Send START_MEDIA_BUFFERING command to Asterisk WebSocket channel to enable audio buffering on the Asterisk side
-        if self._client.is_closing or not self._client.is_connected:
-            logger.warning(
-                f"Cannot send START_MEDIA_BUFFERING command because the WebSocket client is closing or already closed."
-            )
-            return
-        if not self._params.serializer:
-            logger.error(
-                f"Cannot send START_MEDIA_BUFFERING command because no serializer is set in the transport parameters."
-            )
-            return
+        cmd_frame =  AsteriskCommandFrame("START_MEDIA_BUFFERING")
+        await self.send_asterisk_command(cmd_frame)
+
+    async def _monitor_status(self):
+        """Monitor the status of the Asterisk WebSocket channel.
+        
+        Periodically sends a GET_STATUS command to Asterisk. In the response, Asterisk will send STATUS events.
+        It's only used for debugging, and doesn't affect the logic.
+        """
+        
+        RETRY_INTERVAL = 0.08  # seconds
+
+        cmd_frame = AsteriskCommandFrame("GET_STATUS")
+        while True:
+            await self.send_asterisk_command(cmd_frame)
+            await asyncio.sleep(RETRY_INTERVAL)
+
+    async def send_asterisk_command(self, frame: AsteriskCommandFrame) -> None:
+        """Send an AsteriskCommandFrame to the Asterisk WebSocket channel."""
         try:
-            cmd = await self._params.serializer.serialize(
-                AsteriskCommandFrame("START_MEDIA_BUFFERING")
-            )
+            cmd = await self.serialize(frame)
             if cmd:
                 await self._client.send(cmd)
                 logger.info(
-                    f"Sent START_MEDIA_BUFFERING command to Asterisk WebSocket channel to enable audio buffering."
+                    f"Sent command: {frame.cmd} to Asterisk WebSocket channel."
                 )
         except Exception as e:
             logger.error(
-                f"{self} exception sending START_MEDIA_BUFFERING: {e.__class__.__name__} ({e})"
+                f"{self} exception sending AsteriskCommandFrame: {e.__class__.__name__} ({e})"
             )
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -110,29 +131,22 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             and frame.message.get("event", None) == "MEDIA_START"
         ):
             await self._media_start_handler(frame)
+            if self._debug_asterisk_status:
+                asyncio.create_task(self._monitor_status())
+
         elif isinstance(frame, AsteriskCommandFrame):
-            # Send the command to Asterisk WebSocket channel
-            if self._client.is_closing or not self._client.is_connected:
-                logger.warning(
-                    f"Cannot send AsteriskCommandFrame because the WebSocket client is closing or already closed."
-                )
-                return
-            if not self._params.serializer:
-                logger.error(
-                    f"Cannot send AsteriskCommandFrame because no serializer is set in the transport parameters."
-                )
-                return
-            try:
-                cmd = await self._params.serializer.serialize(frame)
-                if cmd:
-                    await self._client.send(cmd)
-                    logger.info(
-                        f"Sent command: {frame.cmd} to Asterisk WebSocket channel."
-                    )
-            except Exception as e:
-                logger.error(
-                    f"{self} exception sending AsteriskCommandFrame: {e.__class__.__name__} ({e})"
-                )
+            await self.send_asterisk_command(frame)
+                    
+    async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
+        # Catch bot-stopped speaking frames and hold them until the bot has effectively stopped speaking (buffer on the Asterisk side is empty)
+        if isinstance(frame, TTSStoppedFrame):
+            if self._flow_controller and not self._flow_controller.bot_stopped_speaking_fence.is_set():
+                logger.trace("BotStoppedSpeakingFrame is on hold until the bot has effectively stopped speaking.")
+                # Hold them
+                await self._flow_controller.bot_stopped_speaking_fence.wait()
+                logger.debug("Bot effectively stopped speaking. Sending BotStoppedSpeakingFrame to the pipeline.")
+        await super().push_frame(frame, direction)
+    
     async def write_audio_frame(self, frame: OutputAudioRawFrame) -> bool:
         """Write an audio frame into local buffer.
 
@@ -145,25 +159,6 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         Returns:
             True if the audio frame was "written" (passed to the flow controller) successfully, False otherwise.
         """
-
-        if self._client.is_closing or not self._client.is_connected:
-            logger.warning(
-                f"Cannot write audio frame because the WebSocket client is closing or already closed."
-            )
-            return False
-
-        if not self._params.serializer:
-            logger.error(
-                f"Serializer is not set in transport parameters. Cannot write audio frame."
-            )
-            return False
-
-        if self._flow_controller is None:
-            logger.error(
-                f"Flow controller is not initialized. Cannot write audio frame."
-            )
-            return False
-
         frame = OutputAudioRawFrame(
             audio=frame.audio,
             sample_rate=frame.sample_rate,
@@ -171,9 +166,14 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         )
 
         try:
-            payload = await self._params.serializer.serialize(frame)
+            payload = await self.serialize(frame)
             if payload:
-                if type(payload) == bytes:
+                if isinstance(payload, bytes):
+                    if self._flow_controller is None:
+                        logger.error(
+                            "Flow controller is not initialized. Cannot write audio frame."
+                        )
+                        return False
                     self._flow_controller(payload)
                     return True
                 else:
@@ -183,7 +183,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                     return False
             else:
                 logger.trace(
-                    f"Serializer returned None or empty payload. Cannot write audio frame."
+                    "Serializer returned None or empty payload. Cannot write audio frame."
                 )
                 return False
         except Exception as e:

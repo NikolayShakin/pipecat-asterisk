@@ -65,6 +65,7 @@ class FlowController:
         self._min_batch = self.MIN_BATCH * self._psize
         # Start the flow control task
         self._flow_control = asyncio.create_task(self.flow_control())
+        self.bot_stopped_speaking_fence = asyncio.Event()  # Event to signal that the bot has stopped speaking
 
     def __call__(self, chunk: bytes) -> None:
         """Add an audio chunk to the local buffer
@@ -110,6 +111,11 @@ class FlowController:
             # Flow control logic
             # First check if we have something in the local buffer
             if self._local_buffer_size > 0:
+                # Clear the bot-stopped-speaking fence if we have something to send
+                if self.bot_stopped_speaking_fence.is_set():
+                    self.bot_stopped_speaking_fence.clear()
+                    logger.trace("Bot started speaking, cleared bot_stopped_speaking_fence.")
+                
                 # If the remote buffer is under the low water mark we send whatever we have in the local buffer
                 if self._remote_buffer_utilization < self._remote_buffer_low_water:
                     await self.send_chunks()
@@ -122,6 +128,11 @@ class FlowController:
                 ) and (self._local_buffer_size >= self._min_batch):
                     await self.send_chunks()
                 # If the remote buffer is above the high water mark we don't send anything and wait for the next tick to see if the remote buffer utilization has decreased enough to send more audio
+
+            if not self.bot_stopped_speaking_fence.is_set() and self._remote_buffer_utilization == 0:
+                # If the remote buffer is empty we can assume that the bot has stopped speaking
+                self.bot_stopped_speaking_fence.set()  # Signal that the bot has effectively stopped speaking
+                logger.trace("Bot has stopped speaking, set bot_stopped_speaking_fence.")
 
     def _pop_bytes(self, max_bytes: int) -> bytes:
         """Pop up to ``max_bytes`` from the head of the local buffer.

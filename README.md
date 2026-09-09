@@ -107,14 +107,14 @@ uv run examples/pipecat_asterisk/ws_server.py
 In case you want to estimate audio quality with respect to different sampling rates, you can run:
 ```bash
 cd examples/pipecat_asterisk
-uv run examples/pipecat_asterisk/long_media_test.py
+uv run long_media_test.py
 ```
 The script emulates generating audio chunks from TTS service, without need to pay for a real TTS service.
 The directory contains some audio samples with different sampling rates, but your can use your own files. Save them as raw audio in `slin` (16-bit PCM, mono) format.
 
 ## Compatibility
 
-- Tested with **Pipecat v1.1.0**
+- Tested with **Pipecat v1.8.1**
 - Requires **Python 3.12+**
 
 ## Internal Architecture

@@ -270,6 +270,22 @@ class AsteriskFrameSerializer(FrameSerializer):
         )
         return InputTransportMessageFrame(message=message)
 
+    @handler("STATUS")
+    def _status(self, message: dict) -> Frame | None:
+        """STATUS event handler.
+
+        Handles STATUS events from Asterisk. This event provides information about the current status of the Asterisk channel, including the queue length
+        which can be useful to check the remote buffer utilization synchronization in flow controller.
+
+        Args:
+            message: The dictionary representing of the STATUS event message from Asterisk.
+        """
+        logger.trace(
+            f"Received STATUS event from Asterisk: {message}. Asterisk channel status."
+        )
+        return InputTransportMessageFrame(message=message)
+
+
     #### Pipecat Frame handlers ####
 
     @handler(OutputAudioRawFrame)
