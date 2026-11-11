@@ -42,14 +42,20 @@ class FlowController:
 
     # Based on Asterisk documentation.The maximum websocket message size the underlying websocket code can handle is 65500 bytes.
     # We need to ensure we don't exceed this limit when sending audio chunks.
+    # It's also the most we send in one tick, whatever the message size (see max_message_bytes).
     MAX_WS_SEND = 65500
 
     def __init__(
-        self, ptime: int, psize: int, websocket_client: FastAPIWebsocketClient
+        self, ptime: int, psize: int, websocket_client: FastAPIWebsocketClient, max_message_bytes: int | None = None
     ):
         self._ptime = ptime  # Audio chunk duration. In milliseconds
         self._psize = psize  # Audio chunk size. In bytes
         self._websocket_client = websocket_client
+        # Largest websocket message to send: MAX_WS_SEND by default, otherwise whole frames and at most MAX_WS_SEND.
+        # What we send in a tick is split into messages of this size.
+        self._max_message_bytes = self.MAX_WS_SEND
+        if max_message_bytes:
+            self._max_message_bytes = max(psize, min(max_message_bytes, self.MAX_WS_SEND) // psize * psize)
         # Deque of bytes chunks (head == oldest). Total queued bytes is tracked
         # separately so the working-range check stays O(1) without walking the
         # deque. See `_pop_bytes` for how sends drain it.
@@ -174,11 +180,14 @@ class FlowController:
 
         # Calculate the number of bytes to send
         bytes_to_send = min(
-            self._local_buffer_size, self.MAX_WS_SEND
-        )  # Ensure we don't exceed the websocket maximum message size
-        if bytes_to_send > 0:
+            self._local_buffer_size, self.MAX_WS_SEND // self._max_message_bytes * self._max_message_bytes
+        )  # Ensure we don't exceed the websocket maximum message size, nor send more than MAX_WS_SEND (in whole messages) in a tick
+        while bytes_to_send > 0:
             # Take the bytes to send from the head of the local buffer
-            chunk = self._pop_bytes(bytes_to_send)
+            chunk = self._pop_bytes(min(bytes_to_send, self._max_message_bytes))
+            if not chunk:
+                break  # The buffer was dropped (interruption) while we were sending
+            bytes_to_send -= len(chunk)
 
             # Send the chunk to the websocket
             await self._websocket_client.send(chunk)

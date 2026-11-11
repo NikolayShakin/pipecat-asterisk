@@ -17,7 +17,7 @@ PTIME_MS = 20
 PSIZE_BYTES = 640  # slin16 @ 20ms == 16000 Hz * 2 bytes/sample * 0.02 s
 
 
-def _make_controller() -> FlowController:
+def _make_controller(**kwargs) -> FlowController:
     """Build a controller with a mock websocket client.
 
     The controller starts its `flow_control` task in `__init__`, so this
@@ -25,7 +25,7 @@ def _make_controller() -> FlowController:
     """
     client = MagicMock()
     client.send = AsyncMock()
-    return FlowController(ptime=PTIME_MS, psize=PSIZE_BYTES, websocket_client=client)
+    return FlowController(ptime=PTIME_MS, psize=PSIZE_BYTES, websocket_client=client, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +128,74 @@ async def test_pop_bytes_returns_empty_when_empty():
         assert fc._pop_bytes(0) == b""
     finally:
         await fc.close()
+
+
+# ---------------------------------------------------------------------------
+# send_chunks message size
+# ---------------------------------------------------------------------------
+
+
+def _sent_sizes(fc: FlowController) -> list[int]:
+    return [len(call.args[0]) for call in fc._websocket_client.send.await_args_list]
+
+
+@pytest.mark.asyncio
+async def test_send_chunks_sends_one_message_per_tick_by_default():
+    fc = _make_controller()
+    await fc.close()  # Stop the flow_control task; drive send_chunks directly.
+    fc(b"\x00" * 70000)
+    await fc.send_chunks()
+    assert _sent_sizes(fc) == [FlowController.MAX_WS_SEND]
+
+
+@pytest.mark.asyncio
+async def test_send_chunks_splits_what_it_sends_into_messages_of_max_message_bytes():
+    fc = _make_controller(max_message_bytes=6400)
+    await fc.close()
+    fc(b"\x00" * 20000)
+    await fc.send_chunks()
+    # Same amount per tick as with one message; only the message size changes.
+    assert _sent_sizes(fc) == [6400, 6400, 6400, 800]
+    assert fc._local_buffer_size == 0
+    assert fc._remote_buffer_utilization == 20000
+
+
+@pytest.mark.asyncio
+async def test_send_chunks_stops_when_the_buffer_is_dropped_while_sending():
+    """An interruption can drop the buffer while a message is being sent."""
+    fc = _make_controller(max_message_bytes=6400)
+    await fc.close()
+    fc._websocket_client.send.side_effect = lambda chunk: fc.drop_buffer()
+    fc(b"\x00" * 20000)
+    await asyncio.wait_for(fc.send_chunks(), timeout=1.0)
+    assert _sent_sizes(fc) == [6400]
+
+
+@pytest.mark.asyncio
+async def test_send_chunks_sends_at_most_max_ws_send_per_tick_in_whole_messages():
+    fc = _make_controller(max_message_bytes=6400)
+    await fc.close()
+    fc(b"\x00" * 70000)
+    await fc.send_chunks()
+    assert _sent_sizes(fc) == [6400] * 10
+    assert fc._local_buffer_size == 70000 - 64000
+
+
+@pytest.mark.parametrize(
+    "max_message_bytes, expected",
+    [
+        (6000, 5760),  # rounded down to whole frames
+        (100, PSIZE_BYTES),  # at least one frame
+        (100000, 65280),  # at most MAX_WS_SEND, in whole frames
+    ],
+)
+@pytest.mark.asyncio
+async def test_max_message_bytes_is_whole_frames_and_at_most_max_ws_send(max_message_bytes, expected):
+    fc = _make_controller(max_message_bytes=max_message_bytes)
+    await fc.close()
+    fc(b"\x00" * 70000)
+    await fc.send_chunks()
+    assert max(_sent_sizes(fc)) == expected
 
 
 # ---------------------------------------------------------------------------
