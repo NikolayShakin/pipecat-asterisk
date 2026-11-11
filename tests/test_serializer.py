@@ -88,6 +88,19 @@ async def test_handle_event_dispatches_dtmf_end(event):
     assert isinstance(frame, InputDTMFFrame)
     assert frame.button == KeypadEntry(event["digit"])
 
+@pytest.mark.parametrize("digit", ["A", "B", "C", "D"])
+async def test_handle_event_passes_on_dtmf_end_without_keypad_entry(digit):
+    """Pipecat's KeypadEntry has no A-D; the event reaches the pipeline as a transport message instead of being dropped."""
+    event = {"event": "DTMF_END", "channel_id": "123456789", "digit": digit}
+    serializer = AsteriskFrameSerializer()
+    frame = await serializer._handle_event(event)
+    assert isinstance(frame, InputTransportMessageFrame)
+    assert frame.message == event
+
+async def test_handle_event_dtmf_end_without_digit_returns_none():
+    serializer = AsteriskFrameSerializer()
+    assert await serializer._handle_event({"event": "DTMF_END", "channel_id": "123456789"}) is None
+
 @pytest.mark.parametrize(
     "event, frame_type",
     [

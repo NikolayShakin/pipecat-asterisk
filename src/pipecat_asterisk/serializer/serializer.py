@@ -38,6 +38,7 @@ class AsteriskFrameSerializer(FrameSerializer):
     channel events/commands and binary audio data and vice versa.
         Asterisk to Pipecat:
             - when DTMF detected on Asterisk websocket channel we send InputDTMFFrame to Pipecat.
+                Digits A-D have no KeypadEntry in Pipecat, so for them we send InputTransportMessageFrame with the DTMF_END event as the payload.
             - when MEDIA_START event is received we send InputTransportMessageFrame to Pipecat with the event message as the payload,
                 so the pipeline can use the information provided in that event (e.g., channel variables) and also know when the media starts flowing.
             - when MEDIA_XOFF event is received we log a warning that Asterisk is asking us to pause sending media, normally it should not happen if the transport implements flow control correctly.
@@ -235,21 +236,23 @@ class AsteriskFrameSerializer(FrameSerializer):
         """DTMF_END event handler.
 
         Handles DTMF_END events from Asterisk and converts them to InputDTMFFrame.
+        Asterisk also reports the digits A, B, C and D (RFC 4733 events 12-15), which Pipecat's KeypadEntry doesn't have.
+        For those we pass the event on as InputTransportMessageFrame, so the pipeline can still act on them.
 
         Args:
             message: The dictionary representing of the DTMF_END event message from Asterisk.
 
         Returns:
-            An InputDTMFFrame if a valid DTMF digit is found, otherwise None.
+            An InputDTMFFrame if the digit is a KeypadEntry, an InputTransportMessageFrame for any other digit, otherwise None.
         """
         digit = message.get("digit")
         if digit:
             try:
                 return InputDTMFFrame(KeypadEntry(digit))
             except ValueError:
-                # Handle case where string doesn't match any enum value
-                logger.warning(f"Invalid DTMF digit received: {digit}")
-                return None
+                # Not a KeypadEntry (e.g. A-D)
+                logger.debug(f"DTMF digit {digit} has no KeypadEntry, passing the event on as InputTransportMessageFrame.")
+                return InputTransportMessageFrame(message=message)
         return None
 
     @handler("QUEUE_DRAINED")
