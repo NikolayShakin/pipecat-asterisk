@@ -113,6 +113,18 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 f"{self} exception sending AsteriskCommandFrame: {e.__class__.__name__} ({e})"
             )
 
+    async def cleanup(self):
+        """Stop the flow control task when the pipeline is torn down.
+
+        The flow controller's task runs until it is cancelled. Left running after the call it
+        keeps waking every ptime, and it keeps the transport, and the pipeline the transport
+        belongs to, in memory.
+        """
+        if self._flow_controller:
+            await self._flow_controller.close()
+            self._flow_controller = None
+        await super().cleanup()
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process outgoing frames.
 
