@@ -127,8 +127,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             if self._flow_controller:
                 self._flow_controller.drop_buffer()
                 if isinstance(frame, InterruptionFrame):
-                    # FLUSH_MEDIA (sent by the serializer for the InterruptionFrame) also ends media buffering on the Asterisk side.
-                    # Without buffering, Asterisk drops the end of every message that is not a whole frame, so turn it on again.
+                    # FLUSH_MEDIA disables buffering; enable it again
                     await self.send_asterisk_command(AsteriskCommandFrame("START_MEDIA_BUFFERING"))
         elif (
             isinstance(frame, InputTransportMessageFrame)
