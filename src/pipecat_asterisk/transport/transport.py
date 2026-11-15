@@ -113,6 +113,16 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                 f"{self} exception sending AsteriskCommandFrame: {e.__class__.__name__} ({e})"
             )
 
+    async def cleanup(self):
+        """Stop the flow control task when the pipeline is torn down.
+
+        Prevents orphaned async task.
+        """
+        if self._flow_controller:
+            await self._flow_controller.close()
+            self._flow_controller = None
+        await super().cleanup()
+
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         """Process outgoing frames.
 
