@@ -116,9 +116,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
     async def cleanup(self):
         """Stop the flow control task when the pipeline is torn down.
 
-        The flow controller's task runs until it is cancelled. Left running after the call it
-        keeps waking every ptime, and it keeps the transport, and the pipeline the transport
-        belongs to, in memory.
+        Prevents orphaned async task.
         """
         if self._flow_controller:
             await self._flow_controller.close()
