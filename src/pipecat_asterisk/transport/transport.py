@@ -36,6 +36,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         transport: "AsteriskWebsocketTransport",
         client: FastAPIWebsocketClient,
         params: FastAPIWebsocketParams | None = None,
+        max_message_bytes: int | None = None,
         **kwargs,
     ):
         if params is None:
@@ -47,6 +48,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
         super().__init__(transport, client, params, **kwargs)
         self._flow_controller = None
         self._debug_asterisk_status = kwargs.get('debug_asterisk_status', False)
+        self._max_message_bytes = max_message_bytes
 
     async def serialize(self, frame: Frame) -> bytes | str | None:
         """Serialize a frame to bytes using the serializer in transport parameters."""
@@ -75,7 +77,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
             )
             return
 
-        self._flow_controller = FlowController(ptime, psize, self._client)
+        self._flow_controller = FlowController(ptime, psize, self._client, max_message_bytes=self._max_message_bytes)
 
         logger.debug(
             f"Initialized flow controller with ptime={ptime} ms, psize={psize} bytes. Remote buffer low water mark: {self._flow_controller._remote_buffer_low_water} bytes, high water mark: {self._flow_controller._remote_buffer_high_water} bytes."
@@ -213,7 +215,16 @@ class AsteriskWebsocketTransport(FastAPIWebsocketTransport):
         params: FastAPIWebsocketParams | None = None,
         input_name: str | None = None,
         output_name: str | None = None,
+        max_message_bytes: int | None = None,
     ):
+        """
+        Args:
+            max_message_bytes: Largest websocket message used to send audio to Asterisk, 65500 bytes by default (and at most).
+                When set, it's rounded down to whole frames (optimal_frame_size).
+                Asterisk hangs up ("Websocket seems unresponsive") when one message takes it more than 10 reads,
+                which can happen to large messages that cross a network or a TLS proxy in many TCP segments.
+                Smaller messages don't change how much audio is sent per ptime.
+        """
         if params is None:
             params = FastAPIWebsocketParams(
                 serializer=AsteriskFrameSerializer(),
@@ -223,5 +234,5 @@ class AsteriskWebsocketTransport(FastAPIWebsocketTransport):
         super().__init__(websocket, params, input_name, output_name)
 
         self._output = AsteriskWebsocketOutputTransport(
-            self, self._client, params, name=output_name
+            self, self._client, params, max_message_bytes=max_message_bytes, name=output_name
         )
