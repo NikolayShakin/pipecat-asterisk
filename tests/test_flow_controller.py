@@ -192,3 +192,36 @@ async def test_close_graceful_yields_loop_and_drains():
     finally:
         # Already cancelled above; second close() is a no-op safety net.
         await fc.close()
+
+
+# ---------------------------------------------------------------------------
+# bot_stopped_speaking_fence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bot_stopped_speaking_fence_lifecycle():
+    fc = _make_controller()
+    try:
+        # Initially set because buffers are empty
+        assert fc.bot_stopped_speaking_fence.is_set()
+
+        # Cleared on receiving audio
+        fc(b"\x00" * PSIZE_BYTES)
+        assert not fc.bot_stopped_speaking_fence.is_set()
+
+        # drop_buffer sets the fence
+        fc.drop_buffer()
+        assert fc.bot_stopped_speaking_fence.is_set()
+    finally:
+        await fc.close()
+
+
+@pytest.mark.asyncio
+async def test_close_sets_bot_stopped_speaking_fence():
+    fc = _make_controller()
+    fc(b"\x00" * PSIZE_BYTES)
+    assert not fc.bot_stopped_speaking_fence.is_set()
+
+    await fc.close(gracefully=False)
+    assert fc.bot_stopped_speaking_fence.is_set()

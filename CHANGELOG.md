@@ -33,3 +33,7 @@
 - Remote buffer monitor for debugging the state of the remote audio buffer.
 ### Fixed
 - Fixed issue early triggering of bot-stopped-speaking event.
+
+## [0.1.5] - 2026-11-22
+### Fixed
+- Fixed bug in transport where `TTSStoppedFrame` was checked instead of `BotStoppedSpeakingFrame` when waiting for Asterisk audio playback to complete.
