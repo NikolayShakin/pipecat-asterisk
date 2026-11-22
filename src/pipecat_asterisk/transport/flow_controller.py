@@ -66,6 +66,7 @@ class FlowController:
         # Start the flow control task
         self._flow_control = asyncio.create_task(self.flow_control())
         self.bot_stopped_speaking_fence = asyncio.Event()  # Event to signal that the bot has stopped speaking
+        self.bot_stopped_speaking_fence.set()
 
     def __call__(self, chunk: bytes) -> None:
         """Add an audio chunk to the local buffer
@@ -81,6 +82,9 @@ class FlowController:
             return
         self._local_buffer.append(chunk)
         self._local_buffer_size += len(chunk)
+        if self.bot_stopped_speaking_fence.is_set():
+            self.bot_stopped_speaking_fence.clear()
+            logger.trace("Bot started speaking, cleared bot_stopped_speaking_fence.")
         logger.trace(
             f"Buffered {len(chunk)} bytes to local buffer. Local buffer size: {self._local_buffer_size} bytes."
         )
@@ -129,8 +133,12 @@ class FlowController:
                     await self.send_chunks()
                 # If the remote buffer is above the high water mark we don't send anything and wait for the next tick to see if the remote buffer utilization has decreased enough to send more audio
 
-            if not self.bot_stopped_speaking_fence.is_set() and self._remote_buffer_utilization == 0:
-                # If the remote buffer is empty we can assume that the bot has stopped speaking
+            if (
+                not self.bot_stopped_speaking_fence.is_set()
+                and self._remote_buffer_utilization == 0
+                and self._local_buffer_size == 0
+            ):
+                # If the remote buffer and local buffer are empty we can assume that the bot has stopped speaking
                 self.bot_stopped_speaking_fence.set()  # Signal that the bot has effectively stopped speaking
                 logger.trace("Bot has stopped speaking, set bot_stopped_speaking_fence.")
 
@@ -210,6 +218,7 @@ class FlowController:
             while self._local_buffer_size > 0 or self._remote_buffer_utilization > 0:
                 await asyncio.sleep(self._ptime / 1000)
         self._flow_control.cancel()
+        self.bot_stopped_speaking_fence.set()
 
     def drop_buffer(self):
         """Drop any buffered audio in the local buffer and reset remote buffer utilization to zero.
@@ -219,3 +228,4 @@ class FlowController:
         self._local_buffer.clear()
         self._local_buffer_size = 0
         self._remote_buffer_utilization = 0.0
+        self.bot_stopped_speaking_fence.set()

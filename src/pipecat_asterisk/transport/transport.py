@@ -15,13 +15,13 @@ from pipecat.transports.websocket.fastapi import (
 )
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.frames.frames import (
-    Frame,
-    InterruptionFrame,
+    BotStoppedSpeakingFrame,
     CancelFrame,
-    StopFrame,
+    Frame,
     InputTransportMessageFrame,
+    InterruptionFrame,
     OutputAudioRawFrame,
-    TTSStoppedFrame,
+    StopFrame,
 )
 
 from .flow_controller import FlowController
@@ -152,7 +152,7 @@ class AsteriskWebsocketOutputTransport(FastAPIWebsocketOutputTransport):
                     
     async def push_frame(self, frame: Frame, direction: FrameDirection = FrameDirection.DOWNSTREAM):
         # Catch bot-stopped speaking frames and hold them until the bot has effectively stopped speaking (buffer on the Asterisk side is empty)
-        if isinstance(frame, TTSStoppedFrame):
+        if isinstance(frame, BotStoppedSpeakingFrame):
             if self._flow_controller and not self._flow_controller.bot_stopped_speaking_fence.is_set():
                 logger.trace("BotStoppedSpeakingFrame is on hold until the bot has effectively stopped speaking.")
                 # Hold them
